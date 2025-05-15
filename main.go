@@ -7,7 +7,6 @@ import (
 
 	eth2client "github.com/attestantio/go-eth2-client"
 	"github.com/attestantio/go-eth2-client/api"
-	apiv1 "github.com/attestantio/go-eth2-client/api/v1"
 	eth2http "github.com/attestantio/go-eth2-client/http"
 	"github.com/attestantio/go-eth2-client/spec/electra"
 	"github.com/attestantio/go-eth2-client/spec/phase0"
@@ -70,7 +69,7 @@ func ListEpochBlocks(service eth2client.Service, epoch phase0.Epoch) (map[phase0
 	return result, nil
 }
 
-func GetBeaconCommitees(ctx context.Context, service eth2client.Service, epoch phase0.Epoch) ([]*apiv1.BeaconCommittee, error) {
+func GetBeaconCommitees(ctx context.Context, service eth2client.Service, epoch phase0.Epoch) (map[phase0.CommitteeIndex][]phase0.ValidatorIndex, error) {
 	provider := service.(eth2client.BeaconCommitteesProvider)
 	resp, err := provider.BeaconCommittees(ctx, &api.BeaconCommitteesOpts{
 		State: fmt.Sprintf("%d", EpochLowestSlot(epoch)),
@@ -79,22 +78,13 @@ func GetBeaconCommitees(ctx context.Context, service eth2client.Service, epoch p
 	if err != nil {
 		return nil, err
 	}
-	return resp.Data, err
-}
-
-func ListCommittees(ctx context.Context, service eth2client.Service, epoch phase0.Epoch) (map[phase0.CommitteeIndex][]phase0.ValidatorIndex, error) {
-	beaconCommittees, err := GetBeaconCommitees(ctx, service, epoch)
-	if err != nil {
-		return nil, err
-	}
 
 	result := make(map[phase0.CommitteeIndex][]phase0.ValidatorIndex)
-
-	for _, committee := range beaconCommittees {
+	for _, committee := range resp.Data {
 		result[committee.Index] = committee.Validators
 	}
 
-	return result, nil
+	return result, err
 }
 
 func main() {
@@ -115,7 +105,10 @@ func main() {
 	}
 
 	committees := make(map[phase0.CommitteeIndex][]phase0.ValidatorIndex)
-	committees, err = ListCommittees(ctx, service, phase0.Epoch(epoch))
+	committees, err = GetBeaconCommitees(ctx, service, phase0.Epoch(epoch))
+
+	fmt.Printf("EpochLowestSlot(epoch): %v\n", EpochLowestSlot(epoch))
+	fmt.Printf("EpochHighestSlot(epoch): %v\n", EpochHighestSlot(epoch))
 
 	for _, block := range epochBlocks {
 		for _, attestation := range block.Message.Body.Attestations {
@@ -124,7 +117,7 @@ func main() {
 				committeesLen += len(committees[phase0.CommitteeIndex(committeeIndex)])
 			}
 			if attestation.AggregationBits.Len() != uint64(committeesLen) {
-				log.Error().Msgf("length mismatch: computed=%v actual=%v", committeesLen, attestation.AggregationBits.Len())
+				log.Error().Msgf("length mismatch (slot=%v): computed=%v actual=%v", block.Message.Slot, committeesLen, attestation.AggregationBits.Len())
 			}
 		}
 	}
