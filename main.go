@@ -10,6 +10,7 @@ import (
 	eth2http "github.com/attestantio/go-eth2-client/http"
 	"github.com/attestantio/go-eth2-client/spec/electra"
 	"github.com/attestantio/go-eth2-client/spec/phase0"
+	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
 )
 
@@ -69,27 +70,37 @@ func ListEpochBlocks(service eth2client.Service, epoch phase0.Epoch) (map[phase0
 	return result, nil
 }
 
-func GetBeaconCommitees(ctx context.Context, service eth2client.Service, epoch phase0.Epoch) (map[phase0.CommitteeIndex][]phase0.ValidatorIndex, error) {
+func GetBeaconCommitees(ctx context.Context, service eth2client.Service, start phase0.Epoch, end phase0.Epoch) (map[phase0.Slot]map[phase0.CommitteeIndex][]phase0.ValidatorIndex, error) {
 	provider := service.(eth2client.BeaconCommitteesProvider)
-	resp, err := provider.BeaconCommittees(ctx, &api.BeaconCommitteesOpts{
-		State: fmt.Sprintf("%d", EpochLowestSlot(epoch)),
-		Epoch: &epoch,
-	})
-	if err != nil {
-		return nil, err
+
+	result := make(map[phase0.Slot]map[phase0.CommitteeIndex][]phase0.ValidatorIndex)
+	for epoch := start; epoch <= end; epoch++ {
+		resp, err := provider.BeaconCommittees(ctx, &api.BeaconCommitteesOpts{
+			State: fmt.Sprintf("%d", EpochLowestSlot(epoch)),
+			Epoch: &epoch,
+		})
+		if err != nil {
+			return nil, err
+		}
+
+		for _, committee := range resp.Data {
+			if _, ok := result[committee.Slot]; !ok {
+				result[committee.Slot] = make(map[phase0.CommitteeIndex][]phase0.ValidatorIndex)
+			}
+			if _, ok := result[committee.Slot][committee.Index]; ok {
+				fmt.Printf("result[committee.Slot][committee.Index]: %v\n", result[committee.Slot][committee.Index])
+			}
+			result[committee.Slot][committee.Index] = committee.Validators
+		}
 	}
 
-	result := make(map[phase0.CommitteeIndex][]phase0.ValidatorIndex)
-	for _, committee := range resp.Data {
-		result[committee.Index] = committee.Validators
-	}
-
-	return result, err
+	return result, nil
 }
 
 func main() {
 	beacon_api_url := "..."       // Put your beacon node URL (http) here
 	epoch := phase0.Epoch(...) // Grab the latest finalized epoch number e.g. from https://beaconcha.in/
+	zerolog.SetGlobalLevel(zerolog.InfoLevel)
 
 	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(time.Minute*1))
 	defer cancel()
@@ -104,8 +115,8 @@ func main() {
 		log.Fatal().Msg("failed listing epoch blocks")
 	}
 
-	committees := make(map[phase0.CommitteeIndex][]phase0.ValidatorIndex)
-	committees, err = GetBeaconCommitees(ctx, service, phase0.Epoch(epoch))
+	committees := make(map[phase0.Slot]map[phase0.CommitteeIndex][]phase0.ValidatorIndex)
+	committees, err = GetBeaconCommitees(ctx, service, phase0.Epoch(epoch-1), phase0.Epoch(epoch))
 
 	fmt.Printf("EpochLowestSlot(epoch): %v\n", EpochLowestSlot(epoch))
 	fmt.Printf("EpochHighestSlot(epoch): %v\n", EpochHighestSlot(epoch))
@@ -114,10 +125,10 @@ func main() {
 		for _, attestation := range block.Message.Body.Attestations {
 			committeesLen := 0
 			for committeeIndex := range attestation.CommitteeBits.BitIndices() {
-				committeesLen += len(committees[phase0.CommitteeIndex(committeeIndex)])
+				committeesLen += len(committees[attestation.Data.Slot][phase0.CommitteeIndex(committeeIndex)])
 			}
 			if attestation.AggregationBits.Len() != uint64(committeesLen) {
-				log.Error().Msgf("length mismatch (slot=%v): computed=%v actual=%v", block.Message.Slot, committeesLen, attestation.AggregationBits.Len())
+				log.Error().Msgf("length mismatch (attestation.slot=%v block.slot=%v): computed=%v actual=%v", attestation.Data.Slot, block.Message.Slot, committeesLen, attestation.AggregationBits.Len())
 			}
 		}
 	}
