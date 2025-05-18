@@ -123,7 +123,7 @@ func main() {
 
 	for _, block := range epochBlocks {
 		blockSlot := block.Message.Slot
-		// Attestations for a slot duty appear on the next block.
+		// Attestations for a slot duty appear on the following blocks.
 		dutySlot := blockSlot - 1
 
 		// Committee is known for slot so calculate the expected length here.
