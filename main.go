@@ -122,14 +122,29 @@ func main() {
 	fmt.Printf("EpochHighestSlot(epoch): %v\n", EpochHighestSlot(epoch))
 
 	for _, block := range epochBlocks {
-		for _, attestation := range block.Message.Body.Attestations {
-			committeesLen := 0
-			for committeeIndex := range attestation.CommitteeBits.BitIndices() {
-				committeesLen += len(committees[attestation.Data.Slot][phase0.CommitteeIndex(committeeIndex)])
-			}
-			if attestation.AggregationBits.Len() != uint64(committeesLen) {
-				log.Error().Msgf("length mismatch (attestation.slot=%v block.slot=%v): computed=%v actual=%v", attestation.Data.Slot, block.Message.Slot, committeesLen, attestation.AggregationBits.Len())
-			}
+		blockSlot := block.Message.Slot
+		// Attestations for a slot duty appear on the next block.
+		dutySlot := blockSlot - 1
+
+		// Committee is known for slot so calculate the expected length here.
+		expectedCommitteeLength := 0
+		for _, validators := range committees[dutySlot] {
+			expectedCommitteeLength += len(validators)
 		}
+
+		for _, attestation := range block.Message.Body.Attestations {
+			// Only include attestations that match the duty slot.
+			if attestation.Data.Slot == dutySlot {
+				committeesLen := 0
+				for _, committeeIndex := range attestation.CommitteeBits.BitIndices() {
+					committeesLen += len(committees[attestation.Data.Slot][phase0.CommitteeIndex(committeeIndex)])
+				}
+				if attestation.AggregationBits.Len() != uint64(committeesLen) {
+					log.Error().Msgf("length mismatch (attestation.slot=%v block.slot=%v): computed=%v actual=%v", attestation.Data.Slot, block.Message.Slot, committeesLen, attestation.AggregationBits.Len())
+				}
+			}
+
+		}
+		log.Info().Msgf("dutySlot: %d, blockSlot: %d, committeeLength: %d", dutySlot, blockSlot, expectedCommitteeLength)
 	}
 }
